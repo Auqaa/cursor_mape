@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-ssr
+.DS_Store
+*.log
+*.tmp
+.env
+client/.env
+server/.env
+
