@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import RouteMap from '../components/RouteMap';
 import { api } from '../lib/api';
-import { getDistanceMeters, getDistanceToPolylineMeters } from '../lib/geo';
+import { getDistanceMeters } from '../lib/geo';
 import {
   getRoutePlayMode,
   getSessionId,
@@ -15,9 +15,7 @@ import {
 
 const TARGET_DISTANCE_METERS = 50;
 const LOW_ACCURACY_THRESHOLD = 60;
-const REROUTE_DISTANCE_METERS = 75;
 const ROUTE_CACHE_PREFIX = 'ryazan_route_cache_v2';
-const DISCOVERY_GROUPS = ['attractions', 'food', 'hotels', 'shops'];
 
 function readCache(key) {
   try {
@@ -72,19 +70,6 @@ function getShareText(route, progress, completion) {
   }
 
   return `Я исследую маршрут "${route?.title || 'Туристическая Рязань'}" и уже набрал ${progress?.mushrooms || 0} грибов.`;
-}
-
-function dedupePois(items = []) {
-  const seen = new Set();
-  return items.filter((item) => {
-    const key = item.id || `${item.title}-${item.coordinates?.lat}-${item.coordinates?.lon}`;
-    if (seen.has(key)) {
-      return false;
-    }
-
-    seen.add(key);
-    return true;
-  });
 }
 
 async function notifyMilestone(message) {
@@ -143,30 +128,10 @@ export default function RouteDetailsPage() {
   const [isOnline, setIsOnline] = useState(globalThis.navigator?.onLine ?? true);
   const [playMode, setPlayMode] = useState(() => getRoutePlayMode(id));
   const [demoMode, setDemoMode] = useState(() => loadSettings().demoMode ?? true);
-  const [nearbyPois, setNearbyPois] = useState({});
-  const [discoveryError, setDiscoveryError] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [poiFilters, setPoiFilters] = useState(() => ({
-    attractions: true,
-    food: true,
-    hotels: true,
-    shops: true,
-  }));
-  const [selectedTarget, setSelectedTarget] = useState(null);
   const [navigation, setNavigation] = useState(null);
   const [navigationError, setNavigationError] = useState('');
   const [navigationLoading, setNavigationLoading] = useState(false);
-  const [recenterTick, setRecenterTick] = useState(0);
-  const [navigationVersion, setNavigationVersion] = useState(0);
   const sessionId = useMemo(() => getSessionId(), []);
-  const lastRerouteAtRef = useRef(0);
-  const lastNavigationBuildRef = useRef({
-    version: -1,
-    destinationKey: '',
-    origin: null,
-  });
   const hasMapApiKey = Boolean(
     import.meta.env.VITE_2GIS_MAPGL_KEY && !import.meta.env.VITE_2GIS_MAPGL_KEY.startsWith('your-')
   );
@@ -178,8 +143,6 @@ export default function RouteDetailsPage() {
     setShareFeedback('');
     setProgress(loadProgress(id, getRoutePlayMode(id)));
     setNavigation(null);
-    setSearchResults([]);
-    setSelectedTarget(null);
   }, [id]);
 
   useEffect(() => {
@@ -287,7 +250,29 @@ export default function RouteDetailsPage() {
     [progress]
   );
   const remainingPoints = progress?.remainingPoints ?? checkpointPoints.length;
-  const discoveryOrigin = position || sortedPoints[0]?.coordinates || null;
+  const routeCompleted = Boolean(progress?.routeCompleted);
+  const firstCheckpoint = checkpointPoints[0] || sortedPoints[0] || null;
+  const lastCompletedCheckpoint = useMemo(
+    () =>
+      checkpointPoints
+        .filter((point) => completedPointOrders.includes(point.order))
+        .slice()
+        .sort((left, right) => left.order - right.order)
+        .at(-1) || null,
+    [checkpointPoints, completedPointOrders]
+  );
+  const remainingRoutePoints = useMemo(() => {
+    if (routeCompleted || !sortedPoints.length) {
+      return [];
+    }
+
+    const anchorOrder = lastCompletedCheckpoint?.order ?? firstCheckpoint?.order;
+    if (!Number.isFinite(anchorOrder)) {
+      return [];
+    }
+
+    return sortedPoints.filter((point) => point.order >= anchorOrder);
+  }, [firstCheckpoint, lastCompletedCheckpoint, routeCompleted, sortedPoints]);
 
   const pointDistances = useMemo(() => {
     if (!position) {
@@ -315,170 +300,40 @@ export default function RouteDetailsPage() {
       .sort((left, right) => (pointDistances[left.order] || 0) - (pointDistances[right.order] || 0))[0];
   }, [checkpointPoints, completedPointOrders, pointDistances, position]);
 
-  useEffect(() => {
-    if (playMode !== 'free') {
-      setSelectedTarget(null);
-      return;
-    }
-
-    setSelectedTarget((current) => {
-      if (current?.type === 'poi') {
-        return current;
-      }
-
-      if (current?.type === 'point' && checkpointPoints.some((point) => point.order === current.order)) {
-        return current;
-      }
-
-      return nearestUnvisitedCheckpoint ? { type: 'point', order: nearestUnvisitedCheckpoint.order } : null;
-    });
-  }, [checkpointPoints, nearestUnvisitedCheckpoint, playMode]);
-
-  const filteredNearbyPois = useMemo(
-    () =>
-      dedupePois(
-        DISCOVERY_GROUPS.filter((group) => poiFilters[group]).flatMap((group) => nearbyPois[group] || [])
-      ),
-    [nearbyPois, poiFilters]
-  );
-
-  const visiblePois = useMemo(() => dedupePois([...searchResults, ...filteredNearbyPois]), [filteredNearbyPois, searchResults]);
-  const selectedPoi = useMemo(
-    () => visiblePois.find((poi) => poi.id === selectedTarget?.id) || null,
-    [selectedTarget?.id, visiblePois]
-  );
-  const selectedRoutePoint = useMemo(
-    () => sortedPoints.find((point) => point.order === selectedTarget?.order) || null,
-    [selectedTarget?.order, sortedPoints]
-  );
-
   const currentPointOrder =
-    playMode === 'thematic'
-      ? nextPointOrder || null
-      : selectedRoutePoint?.order || nearestUnvisitedCheckpoint?.order || null;
+    playMode === 'thematic' ? nextPointOrder || null : nearestUnvisitedCheckpoint?.order || null;
   const currentPoint = checkpointPoints.find((point) => point.order === currentPointOrder) || null;
   const currentDistance = currentPoint ? pointDistances[currentPoint.order] : null;
-
-  const activeDestination = useMemo(() => {
-    if (playMode === 'thematic') {
-      return currentPoint
-        ? {
-            type: 'point',
-            title: currentPoint.title,
-            order: currentPoint.order,
-            coordinates: currentPoint.coordinates,
-          }
-        : null;
-    }
-
-    if (selectedTarget?.type === 'poi' && selectedPoi) {
-      return {
-        type: 'poi',
-        id: selectedPoi.id,
-        title: selectedPoi.title,
-        coordinates: selectedPoi.coordinates,
-      };
-    }
-
-    if (selectedRoutePoint) {
-      return {
-        type: 'point',
-        title: selectedRoutePoint.title,
-        order: selectedRoutePoint.order,
-        coordinates: selectedRoutePoint.coordinates,
-      };
-    }
-
-    return null;
-  }, [currentPoint, playMode, selectedPoi, selectedRoutePoint, selectedTarget]);
-  const destinationKey = activeDestination
-    ? `${activeDestination.type}:${activeDestination.id || activeDestination.order || activeDestination.title}`
-    : 'none';
-
-  useEffect(() => {
-    if (!discoveryOrigin || !isOnline) {
-      return;
-    }
-
-    let cancelled = false;
-
-    api
-      .getNearbyDiscovery({
-        lat: discoveryOrigin.lat,
-        lon: discoveryOrigin.lon,
-        radius: 3200,
-        groups: DISCOVERY_GROUPS,
-      })
-      .then((data) => {
-        if (cancelled) {
-          return;
-        }
-
-        setNearbyPois(data.groups || {});
-        setDiscoveryError('');
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setDiscoveryError(err.message);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [discoveryOrigin, isOnline]);
-
-  const selectedRouteWaypoints = useMemo(() => {
-    if (!activeDestination || activeDestination.type !== 'point') {
-      return [];
-    }
-
-    return sortedPoints
-      .filter((point) => point.pointType === 'waypoint' && point.order < activeDestination.order)
-      .slice(-2)
-      .map((point) => ({
+  const remainingRouteStart = remainingRoutePoints[0] || null;
+  const remainingRouteFinish = remainingRoutePoints.at(-1) || null;
+  const remainingRouteWaypoints = useMemo(
+    () =>
+      remainingRoutePoints.slice(1, -1).map((point) => ({
         title: point.title,
         lat: point.coordinates.lat,
         lon: point.coordinates.lon,
-      }));
-  }, [activeDestination, sortedPoints]);
+      })),
+    [remainingRoutePoints]
+  );
 
   useEffect(() => {
-    if (!route || !discoveryOrigin || !activeDestination || !isOnline) {
+    if (routeCompleted || !route || !remainingRouteStart || !remainingRouteFinish || !isOnline) {
+      setNavigation(null);
       return;
     }
-
-    const previousBuild = lastNavigationBuildRef.current;
-    const movedEnough =
-      !previousBuild.origin || getDistanceMeters(previousBuild.origin, discoveryOrigin) > 120;
-    const shouldRebuild =
-      navigationVersion !== previousBuild.version ||
-      destinationKey !== previousBuild.destinationKey ||
-      (!navigation && movedEnough);
-
-    if (!shouldRebuild) {
-      return;
-    }
-
-    lastNavigationBuildRef.current = {
-      version: navigationVersion,
-      destinationKey,
-      origin: discoveryOrigin,
-    };
 
     let cancelled = false;
     setNavigationLoading(true);
 
     api
       .buildNavigationRoute({
-        origin: discoveryOrigin,
-        destination: activeDestination.coordinates,
-        waypoints: activeDestination.type === 'point' ? selectedRouteWaypoints : [],
-        mode: playMode === 'thematic' ? 'thematic' : activeDestination.type === 'poi' ? 'free' : 'free',
+        origin: remainingRouteStart.coordinates,
+        destination: remainingRouteFinish.coordinates,
+        waypoints: remainingRouteWaypoints,
+        mode: 'thematic',
         routeId: route._id,
-        targetPointOrder: activeDestination.type === 'point' ? activeDestination.order : null,
-        includeScenic: activeDestination.type === 'poi',
-        maxScenicWaypoints: 3,
+        targetPointOrder: remainingRouteFinish.order,
+        includeScenic: false,
       })
       .then((response) => {
         if (cancelled) {
@@ -502,37 +357,7 @@ export default function RouteDetailsPage() {
     return () => {
       cancelled = true;
     };
-  }, [
-    activeDestination,
-    destinationKey,
-    discoveryOrigin,
-    isOnline,
-    navigation,
-    navigationVersion,
-    playMode,
-    route,
-    selectedRouteWaypoints,
-  ]);
-
-  const offRouteDistance = useMemo(
-    () => getDistanceToPolylineMeters(position, navigation?.geometry || []),
-    [navigation?.geometry, position]
-  );
-
-  useEffect(() => {
-    if (!position || !navigation?.geometry?.length || !activeDestination || !isOnline) {
-      return;
-    }
-
-    if (offRouteDistance && offRouteDistance > REROUTE_DISTANCE_METERS) {
-      const now = Date.now();
-      if (now - lastRerouteAtRef.current > 8000) {
-        lastRerouteAtRef.current = now;
-        setNotice('Вы отклонились от маршрута. Перестраиваем путь по дорогам...');
-        setNavigationVersion((current) => current + 1);
-      }
-    }
-  }, [activeDestination, isOnline, navigation?.geometry, offRouteDistance, position]);
+  }, [isOnline, remainingRouteFinish, remainingRouteStart, remainingRouteWaypoints, route, routeCompleted]);
 
   const routeDistance = navigation?.summary?.distanceText || `${route?.distanceKm || 0} км`;
   const routeDuration = navigation?.summary?.durationText || `${route?.durationMinutes || 0} мин`;
@@ -545,7 +370,6 @@ export default function RouteDetailsPage() {
           ? '2GIS MapGL'
           : 'локальный режим';
   const lowAccuracy = position?.accuracy > LOW_ACCURACY_THRESHOLD;
-  const routeCompleted = Boolean(progress?.routeCompleted);
   const modalPoint = checkpointPoints.find((point) => point.order === visitModal?.pointOrder) || null;
   const modalQuizResult = modalPoint ? quizResultsByOrder.get(modalPoint.order) || visitModal?.quizResult : null;
   const completion = visitModal?.completion;
@@ -562,7 +386,6 @@ export default function RouteDetailsPage() {
     saveRoutePlayMode(id, nextPlayMode);
     setVisitModal(null);
     setNotice('');
-    setNavigationVersion((current) => current + 1);
   }
 
   function updateDemoMode() {
@@ -602,32 +425,6 @@ export default function RouteDetailsPage() {
       setShareFeedback('Текст для шеринга готов.');
     } catch (err) {
       setShareFeedback(err.message);
-    }
-  }
-
-  async function handleSearchSubmit(event) {
-    event.preventDefault();
-    if (!searchQuery.trim() || !discoveryOrigin) {
-      return;
-    }
-
-    setSearchLoading(true);
-    setDiscoveryError('');
-
-    try {
-      const response = await api.searchDiscovery({
-        query: searchQuery.trim(),
-        lat: discoveryOrigin.lat,
-        lon: discoveryOrigin.lon,
-      });
-      setSearchResults(response.items || []);
-      if (response.items?.[0]) {
-        setSelectedTarget({ type: 'poi', id: response.items[0].id });
-      }
-    } catch (err) {
-      setDiscoveryError(err.message);
-    } finally {
-      setSearchLoading(false);
     }
   }
 
@@ -680,7 +477,6 @@ export default function RouteDetailsPage() {
         quizResult: null,
         completion: null,
       });
-      setNavigationVersion((current) => current + 1);
 
       if (response.milestone?.halfWayReachedNow) {
         const message = `Осталось всего ${response.milestone.remainingPoints} точек до супер-приза!`;
@@ -749,33 +545,6 @@ export default function RouteDetailsPage() {
     });
   }
 
-  function togglePoiFilter(group) {
-    setPoiFilters((current) => ({
-      ...current,
-      [group]: !current[group],
-    }));
-  }
-
-  function selectRoutePoint(point) {
-    if (!point) {
-      return;
-    }
-
-    setSelectedTarget({ type: 'point', order: point.order });
-    setNotice(`Прокладываем путь к точке «${point.title}».`);
-    setNavigationVersion((current) => current + 1);
-  }
-
-  function selectPoi(poi) {
-    if (!poi) {
-      return;
-    }
-
-    setSelectedTarget({ type: 'poi', id: poi.id });
-    setNotice(`Прокладываем прогулочный путь к месту «${poi.title}».`);
-    setNavigationVersion((current) => current + 1);
-  }
-
   const isRouteLoading = !route && !error;
 
   return (
@@ -835,9 +604,6 @@ export default function RouteDetailsPage() {
               <button className={demoMode ? 'btn active' : 'btn secondary'} onClick={updateDemoMode} type="button">
                 {demoMode ? 'Демо-режим включен' : 'Демо-режим выключен'}
               </button>
-              <button className="btn secondary" onClick={() => setRecenterTick((current) => current + 1)} type="button">
-                Следовать за мной
-              </button>
             </div>
           </div>
 
@@ -861,9 +627,9 @@ export default function RouteDetailsPage() {
             </div>
             <div className="status-card">
               <span className="status-card__label">Следующая цель</span>
-              <strong>{activeDestination ? activeDestination.title : 'Маршрут завершен'}</strong>
+              <strong>{currentPoint ? currentPoint.title : 'Маршрут завершен'}</strong>
               {currentPoint && <p>До checkpoint-а: {formatDistance(currentDistance)}</p>}
-              {selectedPoi && <p>Путь к месту из 2GIS discovery.</p>}
+              {!currentPoint && routeCompleted && <p>Финиш достигнут, маршрутная линия скрыта.</p>}
             </div>
           </div>
 
@@ -872,11 +638,7 @@ export default function RouteDetailsPage() {
               Низкая точность GPS. Подойдите ближе к открытому пространству и обновите позицию.
             </p>
           )}
-          {offRouteDistance > REROUTE_DISTANCE_METERS && (
-            <p className="status-note">Вы ушли от линии маршрута примерно на {formatDistance(offRouteDistance)}.</p>
-          )}
           {progressError && <p className="status-note">{progressError}</p>}
-          {discoveryError && <p className="status-note">{discoveryError}</p>}
           {notice && <p className="success-text">{notice}</p>}
           {shareFeedback && <p className="success-text">{shareFeedback}</p>}
 
@@ -886,12 +648,6 @@ export default function RouteDetailsPage() {
             completedPointOrders={completedPointOrders}
             currentPointOrder={currentPointOrder}
             playMode={playMode}
-            userPosition={position}
-            pois={visiblePois}
-            selectedPoiId={selectedPoi?.id || ''}
-            onPointSelect={selectRoutePoint}
-            onPoiSelect={selectPoi}
-            recenterTick={recenterTick}
             mapStatus={navigation?.source || 'idle'}
           />
 
@@ -902,59 +658,6 @@ export default function RouteDetailsPage() {
               {playMode === 'thematic' ? 'Еще не доступно' : 'Доступно свободно'}
             </span>
             <span className="legend-chip legend-chip--waypoint">Scenic waypoint</span>
-          </div>
-
-          <div className="poi-panel">
-            <div className="poi-panel__header">
-              <div>
-                <h3>2GIS discovery</h3>
-                <p>Живые места рядом: достопримечательности, еда, магазины и отели.</p>
-              </div>
-              <form className="poi-search" onSubmit={handleSearchSubmit}>
-                <input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Найти место или адрес"
-                />
-                <button className="btn secondary" disabled={searchLoading || !searchQuery.trim()} type="submit">
-                  {searchLoading ? 'Ищем...' : 'Искать'}
-                </button>
-              </form>
-            </div>
-
-            <div className="toggle-group">
-              {DISCOVERY_GROUPS.map((group) => (
-                <button
-                  key={group}
-                  className={poiFilters[group] ? 'btn active' : 'btn secondary'}
-                  onClick={() => togglePoiFilter(group)}
-                  type="button"
-                >
-                  {group === 'attractions'
-                    ? 'Достопримечательности'
-                    : group === 'food'
-                      ? 'Еда'
-                      : group === 'hotels'
-                        ? 'Отели'
-                        : 'Магазины'}
-                </button>
-              ))}
-            </div>
-
-            <div className="poi-list">
-              {visiblePois.slice(0, 10).map((poi) => (
-                <article key={poi.id} className={selectedPoi?.id === poi.id ? 'poi-card poi-card--selected' : 'poi-card'}>
-                  <div>
-                    <h4>{poi.title}</h4>
-                    <p>{poi.address || poi.subtitle}</p>
-                  </div>
-                  <button className="btn secondary" onClick={() => selectPoi(poi)} type="button">
-                    Вести сюда
-                  </button>
-                </article>
-              ))}
-              {!visiblePois.length && <p>Пока нет загруженных nearby POI. Дождитесь геолокации или попробуйте поиск.</p>}
-            </div>
           </div>
 
           {routeCompleted && (
@@ -1036,11 +739,7 @@ export default function RouteDetailsPage() {
                   </div>
 
                   {!isCheckpoint && (
-                    <div className="point__actions">
-                      <button className="btn secondary" onClick={() => selectRoutePoint(point)} type="button">
-                        Вести сюда
-                      </button>
-                    </div>
+                    <div className="point__actions" />
                   )}
 
                   {isCheckpoint && isCompleted && (
@@ -1090,13 +789,6 @@ export default function RouteDetailsPage() {
                             ? 'Фейковый сканер'
                             : 'Подтвердить код точки'}
                       </button>
-
-                      {playMode === 'free' && (
-                        <button className="btn secondary" onClick={() => selectRoutePoint(point)} type="button">
-                          Вести сюда
-                        </button>
-                      )}
-
                       {!demoMode && !isNearPoint && isUnlocked && (
                         <p className="status-note">
                           Сканер активируется при приближении к точке на {TARGET_DISTANCE_METERS} м. Сейчас: {formatDistance(distanceToPoint)}.

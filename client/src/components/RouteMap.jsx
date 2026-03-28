@@ -26,35 +26,66 @@ function getPointMarkerVariant(point, completedPointOrders, currentPointOrder, p
   return playMode === 'thematic' ? 'locked' : 'pending';
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function createPointMarkerHtml(point, variant) {
-  const order = Number.isFinite(point.order) ? point.order : '•';
+  const isWaypoint = point.pointType === 'waypoint';
+  const order = Number.isFinite(point.order) && !isWaypoint ? point.order : '•';
+  const title = escapeHtml(point.title);
+  const subtitle = escapeHtml(point.address || point.description || 'Рязань');
   return `
-    <button class="map-pin map-pin--${variant}" type="button" aria-label="${point.title}">
-      <span>${order}</span>
+    <button class="map-pin map-pin--${variant} ${isWaypoint ? 'map-pin--scenic' : ''}" type="button" aria-label="${title}">
+      <span class="map-pin__badge">${order}</span>
+      <span class="map-pin__tail" aria-hidden="true"></span>
+      <span class="map-tooltip" role="tooltip">
+        <strong>${title}</strong>
+        <small>${subtitle}</small>
+      </span>
     </button>
-  `;
-}
-
-function createPoiMarkerHtml(poi, selected) {
-  return `
-    <button class="poi-pin poi-pin--${poi.group || 'default'} ${selected ? 'poi-pin--selected' : ''}" type="button" aria-label="${poi.title}">
-      <span>${poi.group === 'food' ? '☕' : poi.group === 'hotels' ? '🛏' : poi.group === 'shops' ? '🛍' : '✦'}</span>
-    </button>
-  `;
-}
-
-function createUserMarkerHtml() {
-  return `
-    <div class="user-pin" aria-label="Вы здесь">
-      <span></span>
-    </div>
   `;
 }
 
 function fitMap(map, geometry, fallbackGeometry) {
-  const bounds = getRouteBounds(geometry?.length > 1 ? geometry : fallbackGeometry);
-  if (bounds) {
+  const routeGeometry = geometry?.length > 1 ? geometry : fallbackGeometry;
+  const normalized = (routeGeometry || []).filter(
+    (point) =>
+      Array.isArray(point) &&
+      point.length >= 2 &&
+      Number.isFinite(point[0]) &&
+      Number.isFinite(point[1]) &&
+      point[0] >= -180 &&
+      point[0] <= 180 &&
+      point[1] >= -90 &&
+      point[1] <= 90
+  );
+
+  if (!normalized.length) {
+    return;
+  }
+
+  if (normalized.length < 2) {
+    map.setCenter(normalized[0], { duration: 400 });
+    return;
+  }
+
+  const bounds = getRouteBounds(normalized);
+  if (!bounds || !Array.isArray(bounds.southWest) || !Array.isArray(bounds.northEast)) {
+    map.setCenter(normalized[0], { duration: 400 });
+    return;
+  }
+
+  try {
     map.fitBounds(bounds, { padding: [48, 48, 48, 48] });
+  } catch (error) {
+    console.error('Map fitBounds failed, fallback to setCenter', error);
+    map.setCenter(normalized[0], { duration: 400 });
   }
 }
 
@@ -64,12 +95,7 @@ export default function RouteMap({
   completedPointOrders = [],
   currentPointOrder = null,
   playMode = 'thematic',
-  userPosition = null,
-  pois = [],
-  selectedPoiId = '',
   onPointSelect,
-  onPoiSelect,
-  recenterTick = 0,
   mapStatus = 'ready',
 }) {
   const mapKey = import.meta.env.VITE_2GIS_MAPGL_KEY;
@@ -79,8 +105,6 @@ export default function RouteMap({
   const mapRef = useRef(null);
   const routeRef = useRef([]);
   const pointMarkersRef = useRef([]);
-  const poiMarkersRef = useRef([]);
-  const userMarkerRef = useRef(null);
   const [mapError, setMapError] = useState('');
   const fallbackGeometry = useMemo(() => buildFallbackGeometry(points), [points]);
 
@@ -99,11 +123,10 @@ export default function RouteMap({
 
         mapApiRef.current = mapgl;
         mapRef.current = new mapgl.Map(containerId, {
-          center: fallbackGeometry[0] || DEFAULT_CENTER,
+          center: DEFAULT_CENTER,
           zoom: 13,
           key: mapKey,
         });
-        fitMap(mapRef.current, navigationGeometry, fallbackGeometry);
         setMapError('');
       })
       .catch((err) => {
@@ -119,20 +142,14 @@ export default function RouteMap({
       for (const marker of pointMarkersRef.current) {
         marker.destroy();
       }
-      for (const marker of poiMarkersRef.current) {
-        marker.destroy();
-      }
-      userMarkerRef.current?.destroy();
       mapRef.current?.destroy();
 
       routeRef.current = [];
       pointMarkersRef.current = [];
-      poiMarkersRef.current = [];
-      userMarkerRef.current = null;
       mapRef.current = null;
       mapApiRef.current = null;
     };
-  }, [containerId, fallbackGeometry, hasMapApiKey, mapKey, navigationGeometry]);
+  }, [containerId, hasMapApiKey, mapKey]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -147,11 +164,10 @@ export default function RouteMap({
 
     routeRef.current = [];
 
-    const geometry = navigationGeometry?.length > 1 ? navigationGeometry : fallbackGeometry;
-    if (geometry.length > 1) {
+    if (navigationGeometry.length > 1) {
       routeRef.current.push(
         new mapgl.Polyline(map, {
-          coordinates: geometry,
+          coordinates: navigationGeometry,
           color: '#d8eee6',
           width: 11,
           zIndex: 1,
@@ -159,7 +175,7 @@ export default function RouteMap({
       );
       routeRef.current.push(
         new mapgl.Polyline(map, {
-          coordinates: geometry,
+          coordinates: navigationGeometry,
           color: '#12664f',
           width: 6,
           zIndex: 2,
@@ -189,73 +205,13 @@ export default function RouteMap({
         const marker = new mapgl.HtmlMarker(map, {
           coordinates: [point.coordinates.lon, point.coordinates.lat],
           html: createPointMarkerHtml(point, variant),
-          anchor: [18, 18],
+          anchor: [17, 39],
           interactive: true,
         });
         marker.getContent().addEventListener('click', () => onPointSelect?.(point));
         return marker;
       });
   }, [completedPointOrders, currentPointOrder, onPointSelect, playMode, points]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    const mapgl = mapApiRef.current;
-    if (!map || !mapgl) {
-      return;
-    }
-
-    for (const marker of poiMarkersRef.current) {
-      marker.destroy();
-    }
-    poiMarkersRef.current = [];
-
-    poiMarkersRef.current = pois
-      .filter((poi) => poi?.coordinates)
-      .map((poi) => {
-        const marker = new mapgl.HtmlMarker(map, {
-          coordinates: [poi.coordinates.lon, poi.coordinates.lat],
-          html: createPoiMarkerHtml(poi, selectedPoiId === poi.id),
-          anchor: [16, 16],
-          interactive: true,
-        });
-        marker.getContent().addEventListener('click', () => onPoiSelect?.(poi));
-        return marker;
-      });
-  }, [onPoiSelect, pois, selectedPoiId]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    const mapgl = mapApiRef.current;
-    if (!map || !mapgl) {
-      return;
-    }
-
-    if (!userPosition) {
-      userMarkerRef.current?.destroy();
-      userMarkerRef.current = null;
-      return;
-    }
-
-    if (!userMarkerRef.current) {
-      userMarkerRef.current = new mapgl.HtmlMarker(map, {
-        coordinates: [userPosition.lon, userPosition.lat],
-        html: createUserMarkerHtml(),
-        anchor: [14, 14],
-        interactive: false,
-      });
-    } else {
-      userMarkerRef.current.setCoordinates([userPosition.lon, userPosition.lat]);
-    }
-  }, [userPosition]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !userPosition) {
-      return;
-    }
-
-    map.setCenter([userPosition.lon, userPosition.lat], { duration: 550 });
-  }, [recenterTick, userPosition]);
 
   if (!hasMapApiKey) {
     return (

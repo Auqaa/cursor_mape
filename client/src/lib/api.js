@@ -45,14 +45,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  getNearbyDiscovery: ({ lat, lon, radius = 3000, groups = [] }) =>
-    request(
-      `/discovery/nearby?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&radius=${encodeURIComponent(radius)}&groups=${encodeURIComponent(groups.join(','))}`
-    ),
-  searchDiscovery: ({ query, lat, lon, radius = 5000 }) =>
-    request(
-      `/discovery/search?query=${encodeURIComponent(query)}&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&radius=${encodeURIComponent(radius)}`
-    ),
   buildNavigationRoute: (payload) =>
     request('/navigation/route', {
       method: 'POST',

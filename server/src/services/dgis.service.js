@@ -410,11 +410,24 @@ export async function buildWalkingRoute({ origin, destination, waypoints = [], l
   const normalizedOrigin = normalizeCoordinates(origin, 'origin');
   const normalizedDestination = normalizeCoordinates(destination, 'destination');
   const normalizedWaypoints = waypoints.map((point, index) => normalizeCoordinates(point, `waypoint ${index + 1}`));
-  const points = [normalizedOrigin, ...normalizedWaypoints, normalizedDestination].map((point) => ({
-    lat: point.lat,
-    lon: point.lon,
-    type: 'stop',
-  }));
+  const points = [
+    {
+      lat: normalizedOrigin.lat,
+      lon: normalizedOrigin.lon,
+      type: 'walking',
+      start: true,
+    },
+    ...normalizedWaypoints.map((point) => ({
+      lat: point.lat,
+      lon: point.lon,
+      type: 'pref',
+    })),
+    {
+      lat: normalizedDestination.lat,
+      lon: normalizedDestination.lon,
+      type: 'walking',
+    },
+  ];
 
   if (points.length < 2) {
     throw new HttpError(400, 'At least origin and destination are required');

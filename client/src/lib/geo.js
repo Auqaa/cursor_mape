@@ -42,10 +42,10 @@ export function getRouteBounds(points = []) {
     maxLat = Math.max(maxLat, lat);
   }
 
-  return [
-    [minLon, minLat],
-    [maxLon, maxLat],
-  ];
+  return {
+    southWest: [minLon, minLat],
+    northEast: [maxLon, maxLat],
+  };
 }
 
 function projectPoint({ lat, lon }, baseLat) {
