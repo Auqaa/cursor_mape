@@ -1,71 +1,55 @@
-import axios from 'axios';
+import { buildWalkingRoute } from './dgis.service.js';
 
-function toPoint(point) {
-  return `${point.coordinates.lon},${point.coordinates.lat}`;
+const WALKING_WAYPOINT_LIMIT = 10;
+
+function buildFallbackCoordinates(sortedPoints) {
+  return sortedPoints.map((point) => [point.coordinates.lat, point.coordinates.lon]);
 }
 
-function buildFallback(route, mode) {
-  if (mode !== 'masstransit') {
-    return [];
-  }
-
-  return route.fallbackTransportSegments.map((segment) => ({
-    fromPointOrder: segment.fromPointOrder,
-    toPointOrder: segment.toPointOrder,
-    routeNumber: segment.routeNumber,
-    vehicleType: segment.vehicleType,
-    stops: segment.stops,
-    source: 'manual',
-  }));
+function buildFallbackSummary(route) {
+  return {
+    distanceMeters: Math.round((route.distanceKm || 0) * 1000),
+    durationSeconds: Math.round((route.durationMinutes || 0) * 60),
+  };
 }
 
-export async function buildRoutePath(route, mode) {
-  const sortedPoints = [...route.points].sort((a, b) => a.order - b.order);
-  const coordinates = sortedPoints.map((p) => [p.coordinates.lat, p.coordinates.lon]);
+export async function buildRoutePath(route) {
+  const sortedPoints = (route.points || [])
+    .filter((point) => point && point.coordinates && typeof point.order === 'number')
+    .sort((a, b) => a.order - b.order);
+  const fallbackCoordinates = buildFallbackCoordinates(sortedPoints);
+  const fallbackSummary = buildFallbackSummary(route);
 
   if (sortedPoints.length < 2) {
-    return { coordinates, transportSegments: [] };
-  }
-
-  const key = process.env.YANDEX_MAPS_API_KEY;
-  const baseUrl = process.env.YANDEX_ROUTER_BASE_URL;
-
-  if (!key || !baseUrl) {
     return {
-      coordinates,
-      transportSegments: buildFallback(route, mode),
+      coordinates: fallbackCoordinates,
+      summary: fallbackSummary,
       source: 'fallback',
     };
   }
 
-  try {
-    const waypoints = sortedPoints.map(toPoint).join('~');
-    const response = await axios.get(baseUrl, {
-      params: {
-        apikey: key,
-        waypoints,
-        mode,
-      },
-      timeout: 7000,
-    });
-
-    const data = response.data || {};
-    const transportSegments = data.transportSegments || [];
-
-    return {
-      coordinates: data.coordinates || coordinates,
-      transportSegments:
-        mode === 'masstransit' && transportSegments.length === 0
-          ? buildFallback(route, mode)
-          : transportSegments,
-      source: 'yandex',
-    };
-  } catch {
-    return {
-      coordinates,
-      transportSegments: buildFallback(route, mode),
-      source: 'fallback',
-    };
+  if (sortedPoints.length > WALKING_WAYPOINT_LIMIT) {
+    throw new Error(`Walking mode supports up to ${WALKING_WAYPOINT_LIMIT} points`);
   }
+
+  const origin = sortedPoints[0].coordinates;
+  const destination = sortedPoints[sortedPoints.length - 1].coordinates;
+  const waypoints = sortedPoints.slice(1, -1).map((point) => point.coordinates);
+  const builtRoute = await buildWalkingRoute({
+    origin,
+    destination,
+    waypoints,
+  });
+
+  return {
+    coordinates:
+      builtRoute.geometry?.length > 1
+        ? builtRoute.geometry.map(([lon, lat]) => [lat, lon])
+        : fallbackCoordinates,
+    summary: {
+      ...fallbackSummary,
+      ...(builtRoute.summary || {}),
+    },
+    source: builtRoute.source || 'fallback',
+  };
 }
-

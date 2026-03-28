@@ -1,20 +1,11 @@
 import mongoose from 'mongoose';
 
-const stopSchema = new mongoose.Schema(
+const quizQuestionSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    order: { type: Number, required: true },
-  },
-  { _id: false }
-);
-
-const fallbackSegmentSchema = new mongoose.Schema(
-  {
-    fromPointOrder: { type: Number, required: true },
-    toPointOrder: { type: Number, required: true },
-    routeNumber: { type: String, required: true },
-    vehicleType: { type: String, default: 'bus' },
-    stops: { type: [stopSchema], default: [] },
+    prompt: { type: String, required: true },
+    options: { type: [String], default: [] },
+    correctOption: { type: Number, required: true },
+    explanation: { type: String, default: '' },
   },
   { _id: false }
 );
@@ -28,7 +19,20 @@ const routePointSchema = new mongoose.Schema(
       lon: { type: Number, required: true },
     },
     order: { type: Number, required: true },
-    qrCode: { type: String, required: true },
+    pointType: {
+      type: String,
+      enum: ['checkpoint', 'waypoint'],
+      default: 'checkpoint',
+    },
+    source: {
+      type: String,
+      enum: ['curated', 'dgis'],
+      default: 'curated',
+    },
+    externalId: { type: String, default: '' },
+    qrCode: { type: String, default: '' },
+    manualCode: { type: String, default: '' },
+    questions: { type: [quizQuestionSchema], default: [] },
   },
   { _id: true }
 );
@@ -41,10 +45,8 @@ const routeSchema = new mongoose.Schema(
     durationMinutes: { type: Number, required: true },
     city: { type: String, default: 'Рязань' },
     points: { type: [routePointSchema], default: [] },
-    fallbackTransportSegments: { type: [fallbackSegmentSchema], default: [] },
   },
   { timestamps: true }
 );
 
 export const Route = mongoose.model('Route', routeSchema);
-

@@ -17,7 +17,7 @@ export default function RoutesListPage() {
 
   return (
     <section>
-      <h1>Маршруты по Рязани</h1>
+      <h1>Пешеходные маршруты по Рязани</h1>
       {loading && <p>Загрузка маршрутов...</p>}
       {error && <p className="error">{error}</p>}
       <div className="cards">
@@ -28,6 +28,9 @@ export default function RoutesListPage() {
             <p>
               Дистанция: {route.distanceKm} км | Длительность: {route.durationMinutes} мин
             </p>
+            <p>
+              Точек: {route.pointCount || route.checkpointCount || 0} | Интерактивов: {route.checkpointCount || 0}
+            </p>
             <Link className="btn" to={`/routes/${route._id}`}>
               Открыть маршрут
             </Link>
@@ -37,4 +40,3 @@ export default function RoutesListPage() {
     </section>
   );
 }
-

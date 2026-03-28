@@ -1,5 +1,4 @@
 import { Route } from '../models/route.model.js';
-import { TransportInfo } from '../models/transport-info.model.js';
 import { HttpError } from '../utils/http-error.js';
 
 export async function createRoute(req, res, next) {
@@ -32,7 +31,6 @@ export async function deleteRoute(req, res, next) {
     if (!route) {
       throw new HttpError(404, 'Route not found');
     }
-    await TransportInfo.deleteMany({ routeId: req.params.id });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -80,26 +78,6 @@ export async function deleteRoutePoint(req, res, next) {
     route.points = route.points.filter((p) => p._id.toString() !== req.params.pointId);
     await route.save();
     res.json(route);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function setTransportFallback(req, res, next) {
-  try {
-    const { routeId } = req.params;
-    await TransportInfo.deleteMany({ routeId });
-    const payload = (req.body.segments || []).map((segment) => ({
-      routeId,
-      fromPointOrder: segment.fromPointOrder,
-      toPointOrder: segment.toPointOrder,
-      routeNumber: segment.routeNumber,
-      vehicleType: segment.vehicleType || 'bus',
-      stops: (segment.stops || []).map((s) => (typeof s === 'string' ? s : s.name)),
-      source: 'manual',
-    }));
-    const saved = await TransportInfo.insertMany(payload);
-    res.json(saved);
   } catch (err) {
     next(err);
   }

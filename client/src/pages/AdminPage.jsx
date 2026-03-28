@@ -8,7 +8,6 @@ const emptyRoute = {
   durationMinutes: 30,
   city: 'Рязань',
   points: [],
-  fallbackTransportSegments: [],
 };
 
 export default function AdminPage() {
@@ -110,28 +109,15 @@ export default function AdminPage() {
         title: `Новая точка ${pointOrder}`,
         description: 'Добавьте описание',
         order: pointOrder,
+        pointType: 'checkpoint',
+        source: 'curated',
         qrCode: `new-point-${Date.now()}`,
+        manualCode: `${9000 + pointOrder}`,
         coordinates: { lat: 54.6269, lon: 39.6916 },
       })
     );
     setMessage('Точка добавлена');
     await fetchRoutes();
-  };
-
-  const saveFallback = async () => {
-    if (!selectedRouteId) return;
-    await withRefresh((access) =>
-      api.setTransportFallback(access, selectedRouteId, [
-        {
-          fromPointOrder: 1,
-          toPointOrder: 2,
-          routeNumber: '5',
-          vehicleType: 'bus',
-          stops: ['Остановка 1', 'Остановка 2'],
-        },
-      ])
-    );
-    setMessage('Fallback транспорта сохранен');
   };
 
   return (
@@ -194,12 +180,9 @@ export default function AdminPage() {
             </div>
 
             <div>
-              <h3>Управление выбранным</h3>
+              <h3>Управление выбранным маршрутом</h3>
               <button className="btn" onClick={addPoint} disabled={!selectedRouteId}>
                 Добавить точку
-              </button>
-              <button className="btn" onClick={saveFallback} disabled={!selectedRouteId}>
-                Сохранить fallback транспорта
               </button>
               <button className="btn danger" onClick={removeRoute} disabled={!selectedRouteId}>
                 Удалить маршрут
@@ -214,4 +197,3 @@ export default function AdminPage() {
     </section>
   );
 }
-

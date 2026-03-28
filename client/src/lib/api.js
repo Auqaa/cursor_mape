@@ -1,9 +1,14 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
 
 async function request(path, options = {}) {
+  const headers = {
+    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.headers || {}),
+  };
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
+    headers,
   });
 
   if (!response.ok) {
@@ -23,10 +28,35 @@ async function request(path, options = {}) {
 export const api = {
   getRoutes: () => request('/routes'),
   getRouteById: (routeId) => request(`/routes/${routeId}`),
-  buildRoute: (routeId, mode) =>
+  buildRoute: (routeId) =>
     request(`/routes/${routeId}/build`, {
       method: 'POST',
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({}),
+    }),
+  getRouteProgress: (routeId, sessionId, playMode) =>
+    request(`/routes/${routeId}/progress?sessionId=${encodeURIComponent(sessionId)}&playMode=${playMode}`),
+  scanRoutePoint: (routeId, payload) =>
+    request(`/routes/${routeId}/scan`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  submitPointQuiz: (routeId, payload) =>
+    request(`/routes/${routeId}/quiz`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getNearbyDiscovery: ({ lat, lon, radius = 3000, groups = [] }) =>
+    request(
+      `/discovery/nearby?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&radius=${encodeURIComponent(radius)}&groups=${encodeURIComponent(groups.join(','))}`
+    ),
+  searchDiscovery: ({ query, lat, lon, radius = 5000 }) =>
+    request(
+      `/discovery/search?query=${encodeURIComponent(query)}&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&radius=${encodeURIComponent(radius)}`
+    ),
+  buildNavigationRoute: (payload) =>
+    request('/navigation/route', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
   adminLogin: (payload) =>
     request('/admin/auth/login', {
@@ -77,11 +107,4 @@ export const api = {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     }),
-  setTransportFallback: (token, routeId, segments) =>
-    request(`/admin/routes/${routeId}/transport-fallback`, {
-      method: 'PUT',
-      body: JSON.stringify({ segments }),
-      headers: { Authorization: `Bearer ${token}` },
-    }),
 };
-

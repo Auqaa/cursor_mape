@@ -10,7 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@pbe/react-yandex-maps": "^1.2.5",
+    "@2gis/mapgl": "^1.71.0",
+    "@2gis/mapgl-directions": "^2.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.13.2"

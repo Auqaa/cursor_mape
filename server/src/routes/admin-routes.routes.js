@@ -5,7 +5,6 @@ import {
   createRoute,
   deleteRoute,
   deleteRoutePoint,
-  setTransportFallback,
   updateRoute,
   updateRoutePoint,
 } from '../controllers/admin-routes.controller.js';
@@ -21,7 +20,4 @@ router.post('/routes/:routeId/points', addRoutePoint);
 router.patch('/routes/:routeId/points/:pointId', updateRoutePoint);
 router.delete('/routes/:routeId/points/:pointId', deleteRoutePoint);
 
-router.put('/routes/:routeId/transport-fallback', setTransportFallback);
-
 export default router;
-
